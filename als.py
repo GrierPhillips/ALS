@@ -43,6 +43,17 @@ class ALS(object):
             features about users extracted by the factorization process.
     """
     def __init__(self, rank, lambda_=0.1, tolerance=0.001):
+        """
+        Create instance of als with given parameters.
+
+        Args:
+            rank (int): Integer representing the rank of the matrix
+                factorization.
+            lambda_ (float, default=0.1): Float representing the regularization
+                term.
+            tolerance (float, default=0.001): Float representing the threshold
+                that a step must be below before update iterations will stop.
+        """
         self.rank = rank
         self.lambda_ = lambda_
         self.tolerance = tolerance
@@ -50,13 +61,16 @@ class ALS(object):
         self.item_feats = None
         self.user_feats = None
 
-    def _check_args(self):
-        pass
-
     @staticmethod
     def root_mean_squared_error(true, pred):
         """
         Calculate the root mean sqaured error.
+
+        Args:
+            true (np.ndarray): Array like of true values.
+            pred (np.ndarray): Array like of predicted values.
+        Returns:
+            rmse (float): Root mean squared error for the given values.
         """
         mse = mean_squared_error(true, pred)
         rmse = np.sqrt(mse)
