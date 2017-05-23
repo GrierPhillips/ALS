@@ -348,3 +348,22 @@ class ALS(object):
         except LinAlgError:
             col = np.zeros((1, rank))
         return col.flatten()
+
+    def update_user(self, user, item, rating):
+        """Update a single user's feature vector.
+
+        When an existing user rates an item the feature vector for that user
+        can be updated withot having to rebuild the entire model. Eventually,
+        the entire model should be rebuilt, but this is as close to a real-time
+        update as is possible.
+
+        Args:
+            user (int): Integer representing the user id.
+            item (int): Integer representing the item id.
+            rating (int): Integer value of the rating assigned to item by user.
+        """
+        self.ratings[user, item] = rating
+        submat = self.item_feats[:, self.ratings[user].indices]
+        row = self.ratings[user].data
+        col = self._update_one(submat, row, self.rank, self.lambda_)
+        self.user_feats[:, user] = col
