@@ -166,6 +166,7 @@ class ALS(object):
             item (int): Integer representing the item id.
         Returns:
             rating (float): Float value of the predicted rating.
+
         """
         rating = self.user_feats.T[user].dot(self.item_feats[:, item])
         return rating
@@ -184,7 +185,7 @@ class ALS(object):
         return ratings
 
     def score(self, true):
-        """Returns the root mean squared error for the predicted values.
+        """Return the root mean squared error for the predicted values.
 
         Args:
             true (pd.DataFrame): A pandas DataFrame structured with the
