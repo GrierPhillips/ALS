@@ -13,13 +13,14 @@ from concurrent.futures import (ProcessPoolExecutor, ThreadPoolExecutor,
 from itertools import repeat
 from os import cpu_count
 
+
 import numpy as np
 from numpy.linalg import LinAlgError
 from scipy.sparse import csr_matrix
 from sklearn.metrics import mean_squared_error
 
 # pylint: disable=E1101
-
+np.seterr(divide='ignore')
 POOL_SIZE = cpu_count()
 
 
@@ -43,7 +44,7 @@ class ALS(object):
     """
 
     def __init__(self, rank, lambda_=0.1, tolerance=0.001, seed=None):
-        """Create instance of als with given parameters.
+        """Create instance of ALS with given parameters.
 
         Args:
             rank (int): Integer representing the rank of the matrix
@@ -108,8 +109,7 @@ class ALS(object):
         idx = ratings.indptr
         col_arr = self.user_feats[:, ratings.indices]
         submat_list = [
-            col_arr[:, row:col] for row, col in zip(idx[:-1], idx[1:])
-        ]
+            col_arr[:, row:col] for row, col in zip(idx[:-1], idx[1:])]
         submats = np.empty(len(submat_list), dtype=object)
         for row, submat in enumerate(submat_list):
             submats[row] = submat
