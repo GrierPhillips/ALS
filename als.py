@@ -8,18 +8,13 @@ parallelized the algorithm in Matlab. This module implements the algorithm in
 parallel in python with the built in concurrent.futures module.
 """
 
-from concurrent.futures import (ProcessPoolExecutor, ThreadPoolExecutor,
-                                as_completed)
-from itertools import repeat
 from os import cpu_count
 import pickle
 import subprocess
 
 
 import numpy as np
-from numpy.linalg import LinAlgError
 from scipy.sparse import csr_matrix
-from sklearn.metrics import mean_squared_error
 
 # pylint: disable=E1101
 np.seterr(divide='ignore')
@@ -45,77 +40,25 @@ class ALS(object):
 
     """
 
-    def __init__(self, rank, lambda_=0.1, tolerance=0.001, seed=None):
+    def __init__(self, rank, alpha=0.1, tolerance=0.001, seed=None):
         """Create instance of ALS with given parameters.
 
         Args:
             rank (int): Integer representing the rank of the matrix
                 factorization.
-            lambda_ (float, default=0.1): Float representing the regularization
+            alpha (float, default=0.1): Float representing the regularization
                 term.
             tolerance (float, default=0.001): Float representing the threshold
                 that a step must be below before update iterations will stop.
 
         """
         self.rank = rank
-        self.lambda_ = lambda_
+        self.alpha = alpha
         self.tolerance = tolerance
         self.rand = np.random.RandomState(seed)
         self.ratings = None
         self.item_feats = None
         self.user_feats = None
-
-    @staticmethod
-    def root_mean_squared_error(true, pred):
-        """Calculate the root mean sqaured error.
-
-        Args:
-            true (np.ndarray): Array like of true values.
-            pred (np.ndarray): Array like of predicted values.
-        Returns:
-            rmse (float): Root mean squared error for the given values.
-
-        """
-        mse = mean_squared_error(true, pred)
-        rmse = np.sqrt(mse)
-        return rmse
-
-    def make_item_submats(self):
-        """Construct array of all the item submatrices from a ratings matrix.
-
-        Returns:
-            submats (np.ndarray): Array containing the submatrix constructed by
-                selecting the columns from the item features for the ratings
-                that exist for each row in the ratings matrix.
-
-        """
-        idx = self.ratings.indptr
-        col_arr = self.item_feats[:, self.ratings.indices]
-        submat_list = [
-            col_arr[:, row:col] for row, col in zip(idx[:-1], idx[1:])]
-        submats = np.empty(len(submat_list), dtype=object)
-        for row, submat in enumerate(submat_list):
-            submats[row] = submat
-        return submats
-
-    def make_user_submats(self):
-        """Construct array of all the user submatrices from a ratings matrix.
-
-        Returns:
-            submats (np.ndarray): Array containing the submatrix constructed by
-                selecting the columns from the user features for the ratings
-                that exist for each column in the ratings matrix.
-
-        """
-        ratings = self.ratings.tocsc()
-        idx = ratings.indptr
-        col_arr = self.user_feats[:, ratings.indices]
-        submat_list = [
-            col_arr[:, row:col] for row, col in zip(idx[:-1], idx[1:])]
-        submats = np.empty(len(submat_list), dtype=object)
-        for row, submat in enumerate(submat_list):
-            submats[row] = submat
-        return submats
 
     def fit(self, ratings):
         """Fit the model to the given ratings.
@@ -126,13 +69,13 @@ class ALS(object):
 
         """
         self.ratings = ratings
-        with open('als.pkl', 'wb') as f:
-            pickle.dump(self, f)
-        subprocess.run(['python', 'fit_als.py', 'als.pkl'])
-        with open('user_feats.pkl', 'rb') as f:
-            self.user_feats = np.load(f)
-        with open('item_feats.pkl', 'rb') as f:
-            self.item_feats = np.load(f)
+        np.savez('ratings_matrix', data=ratings.data, indices=ratings.indices,
+                 indptr=ratings.indptr, shape=ratings.shape)
+        subprocess.run(['python', 'fit_als.py', str(self.rank),
+                        str(self.tolerance), str(self.alpha)])
+        loader = np.load('features.npz')
+        self.user_feats = loader['user']
+        self.item_feats = loader['item']
 
     def predict_one(self, user, item):
         """Given a user and item provide the predicted rating.
