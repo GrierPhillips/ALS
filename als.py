@@ -92,8 +92,7 @@ class ALS(object):
         idx = self.ratings.indptr
         col_arr = self.item_feats[:, self.ratings.indices]
         submat_list = [
-            col_arr[:, row:col] for row, col in zip(idx[:-1], idx[1:])
-        ]
+            col_arr[:, row:col] for row, col in zip(idx[:-1], idx[1:])]
         submats = np.empty(len(submat_list), dtype=object)
         for row, submat in enumerate(submat_list):
             submats[row] = submat
@@ -112,45 +111,11 @@ class ALS(object):
         idx = ratings.indptr
         col_arr = self.user_feats[:, ratings.indices]
         submat_list = [
-            col_arr[:, row:col] for row, col in zip(idx[:-1], idx[1:])
-        ]
+            col_arr[:, row:col] for row, col in zip(idx[:-1], idx[1:])]
         submats = np.empty(len(submat_list), dtype=object)
         for row, submat in enumerate(submat_list):
             submats[row] = submat
         return submats
-
-    def fit(self, ratings):
-        """Fit the model to the given ratings.
-
-        Args:
-            ratings (numpy.ndarray or scipy.sparse): Ratings matrix of users x
-                items.
-
-        """
-        self.ratings = ratings
-        rmse = float('inf')
-        diff = rmse
-        self.item_feats = self.rand.rand(self.rank * self.ratings.shape[1])\
-            .reshape((self.rank, self.ratings.shape[1]))
-        course_avg = self.ratings.sum(0) / (self.ratings != 0).sum(0)
-        course_avg[np.isnan(course_avg)] = 0
-        self.item_feats[0] = course_avg
-        self.user_feats = np.zeros(self.rank * self.ratings.shape[0])\
-            .reshape((self.rank, self.ratings.shape[0]))
-        while diff > self.tolerance:
-            self.update_users()
-            self.update_items()
-            true = self.ratings.data
-            non_zeros = self.ratings.nonzero()
-            pred = np.array(
-                [
-                    self.predict_one(user, item)
-                    for user, item in zip(non_zeros[0], non_zeros[1])
-                ]
-            )
-            new_rmse = self.root_mean_squared_error(true, pred)
-            diff = rmse - new_rmse
-            rmse = new_rmse
 
     def fit(self, ratings):
         """Fit the model to the given ratings.
@@ -220,12 +185,9 @@ class ALS(object):
             raise Exception('The model must be fit before generating a score.')
         ratings = csr_matrix((true.Rating, (true.User, true.Item)))
         non_zeros = ratings.nonzero()
-        pred = np.array(
-            [
-                self.predict_one(user, item)
-                for user, item in zip(non_zeros[0], non_zeros[1])
-            ]
-        )
+        pred = np.array([
+            self.predict_one(user, item)
+            for user, item in zip(non_zeros[0], non_zeros[1])])
         rmse = self.root_mean_squared_error(ratings.data, pred)
         return rmse
 
@@ -242,129 +204,6 @@ class ALS(object):
         self.fit(ratings)
         predictions = self.user_feats.T.dot(self.item_feats)
         return predictions
-
-    def update_users(self):
-        """Update the user features."""
-        user_arrays = np.array_split(
-            np.arange(self.ratings.shape[0]),
-            POOL_SIZE
-        )
-        item_submats = self.make_item_submats()
-        item_submat_arrays = np.array_split(item_submats, POOL_SIZE)
-        rows = np.array_split(
-            np.array(
-                np.hsplit(self.ratings.data, self.ratings.indptr[1:-1])
-            ),
-            POOL_SIZE
-        )
-        self._update_parallel(user_arrays, item_submat_arrays, rows, 'user')
-
-    def update_items(self):
-        """Update the item features."""
-        item_arrays = np.array_split(
-            np.arange(self.ratings.shape[1]),
-            POOL_SIZE
-        )
-        user_submats = self.make_user_submats()
-        user_submat_arrays = np.array_split(user_submats, POOL_SIZE)
-        rows = np.array_split(
-            np.array(
-                np.hsplit(
-                    self.ratings.tocsc().data,
-                    self.ratings.tocsc().indptr[1:-1]
-                )
-            ),
-            POOL_SIZE
-        )
-        self._update_parallel(item_arrays, user_submat_arrays, rows, 'item')
-
-    def _update_parallel(self, arrays, submat_arrays, rows, features):
-        """Update the given features in parallel.
-
-        Args:
-            arrays (np.ndarray): Array of indices that represent which column
-                of the features is being updated.
-            submat_arrays (np.ndarray): Array of submatrices that will be used
-                to calculate the update.
-            rows (np.ndarray): Array of arrays that contain the ratings for the
-                given feature column.
-            features (string): The features that will be updated either 'user'
-                or 'item'
-
-        """
-        with ProcessPoolExecutor() as pool:
-            params = {'rank': self.rank, 'lambda_': self.lambda_}
-            results = pool.map(
-                self._thread_update_features,
-                zip(arrays, submat_arrays, rows, repeat(params))
-            )
-            for result in results:
-                for index, value in result.items():
-                    if features == 'item':
-                        self.item_feats[:, index] = value
-                    else:
-                        self.user_feats[:, index] = value
-
-    def _thread_update_features(self, args):
-        """Split updates of feature matrices to multiple threads.
-
-        Args:
-            indices (np.ndarray): Array of integers representing the index of
-                the user or item that is to be updated.
-            submats (np.ndarray): Array of submatrices that will be used for
-                updating the features.
-            rows (np.ndarray): Array of rows that contain the ratings for the
-                given user or item.
-            params (dict): Parameters for the ALS algorithm
-        Returns:
-            data (dict): Dictionary of data with the user or item to be updated
-                as key and the array of features as the values.
-
-        """
-        indices, submats, rows, params = args
-        rank = params['rank']
-        lambda_ = params['lambda_']
-        data = {}
-        with ThreadPoolExecutor() as pool:
-            threads = {
-                pool.submit(
-                    self._update_one,
-                    item_submat,
-                    row,
-                    rank,
-                    lambda_
-                ): ind for ind, item_submat, row in zip(indices, submats, rows)
-            }
-        for thread in as_completed(threads):
-            ind = threads[thread]
-            result = thread.result()
-            data[ind] = result
-        return data
-
-    @staticmethod
-    def _update_one(submat, row, rank, lam):
-        """Update a single column for one of the feature matrices.
-
-        Args:
-            submat (np.ndarray): Submatrix of columns or rows from ratings
-                corresponding to the reviews by a user or on an item.
-            row (np.ndarray): Array of the ratings for the given item or user.
-            rank (int): The rank of the feature arrays.
-            lambda_ (float): The regularization parameter.
-        Returns:
-            col (np.ndarray): An array that represents a column from the
-                feature matrix that is to be updated.
-
-        """
-        num_ratings = row.size
-        reg_sums = submat.dot(submat.T)\
-            + lam * num_ratings * np.eye(rank)
-        feature_sums = submat.dot(row[np.newaxis].T)
-        try:
-            col = np.linalg.inv(reg_sums).dot(feature_sums)
-        except LinAlgError:
-            col = np.zeros((1, rank))
-        return col.flatten()
 
     def update_user(self, user, item, rating):
         """Update a single user's feature vector.
@@ -400,13 +239,9 @@ class ALS(object):
         """
         shape = self.ratings._shape  # pylint: disable=W0212
         if user_id >= shape[0]:
-            shape = (
-                shape[0] + 1,
-                shape[1]
-            )
+            shape = (shape[0] + 1, shape[1])
         self.ratings.indptr = np.hstack(
-            (self.ratings.indptr, self.ratings.indptr[-1])
-        )
+            (self.ratings.indptr, self.ratings.indptr[-1]))
         if user_id >= self.user_feats.shape[1]:
-            new_col = np.zeros(self.rank).reshape(-1, 1)
+            new_col = np.zeros((self.rank, 1))
             self.user_feats = np.hstack((self.user_feats, new_col))
