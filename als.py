@@ -9,7 +9,6 @@ parallel in python with the built in concurrent.futures module.
 """
 
 from os import cpu_count
-import pickle
 import subprocess
 
 
