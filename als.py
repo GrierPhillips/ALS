@@ -132,16 +132,7 @@ class ALS(object):
         self.item_feats[0] = course_avg
         self.user_feats = np.zeros((self.rank, self.ratings.shape[0]))
         while diff > self.tolerance:
-        # with open('als.pkl', 'wb') as f:
-        #     pickle.dump(self, f)
-        # subprocess.run(['python', 'fit_als.py', 'als.pkl'])
-        # with open('user_feats.pkl', 'rb') as f:
             self.user_feats = np.load(f)
-            # with open('als.pkl', 'wb') as f:
-            #     pickle.dump(self, f)
-            # subprocess.run(['python', 'fit_als.py', 'als.pkl', 'items'])
-        # with open('item_feats.pkl', 'rb') as f:
-        #     self.item_feats = np.load(f)
             self.update_users()
             self.update_items()
             true = self.ratings.data
