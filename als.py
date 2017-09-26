@@ -12,6 +12,9 @@ from concurrent.futures import (ProcessPoolExecutor, ThreadPoolExecutor,
                                 as_completed)
 from itertools import repeat
 from os import cpu_count
+import pickle
+import subprocess
+
 
 import numpy as np
 from numpy.linalg import LinAlgError
@@ -19,7 +22,7 @@ from scipy.sparse import csr_matrix
 from sklearn.metrics import mean_squared_error
 
 # pylint: disable=E1101
-
+np.seterr(divide='ignore')
 POOL_SIZE = cpu_count()
 
 
@@ -43,7 +46,7 @@ class ALS(object):
     """
 
     def __init__(self, rank, lambda_=0.1, tolerance=0.001, seed=None):
-        """Create instance of als with given parameters.
+        """Create instance of ALS with given parameters.
 
         Args:
             rank (int): Integer representing the rank of the matrix
@@ -148,6 +151,23 @@ class ALS(object):
             new_rmse = self.root_mean_squared_error(true, pred)
             diff = rmse - new_rmse
             rmse = new_rmse
+
+    def fit(self, ratings):
+        """Fit the model to the given ratings.
+
+        Args:
+            ratings (numpy.ndarray or scipy.sparse): Ratings matrix of users x
+                items.
+
+        """
+        self.ratings = ratings
+        with open('als.pkl', 'wb') as f:
+            pickle.dump(self, f)
+        subprocess.run(['python', 'fit_als.py', 'als.pkl'])
+        with open('user_feats.pkl', 'rb') as f:
+            self.user_feats = np.load(f)
+        with open('item_feats.pkl', 'rb') as f:
+            self.item_feats = np.load(f)
 
     def predict_one(self, user, item):
         """Given a user and item provide the predicted rating.
@@ -364,3 +384,29 @@ class ALS(object):
         row = self.ratings[user].data
         col = self._update_one(submat, row, self.rank, self.lambda_)
         self.user_feats[:, user] = col
+
+    def add_user(self, user_id):
+        """Add a user to the model.
+
+        When a new user is added append a new row to the ratings matrix and
+        create a new column in user_feats. When the new user rates an item,
+        the model will be ready insert the rating and use the update_user
+        method to calculate the least squares approximation of the user
+        features.
+
+        Args:
+            user_id (int): The index of the user in the ratings matrix.
+
+        """
+        shape = self.ratings._shape  # pylint: disable=W0212
+        if user_id >= shape[0]:
+            shape = (
+                shape[0] + 1,
+                shape[1]
+            )
+        self.ratings.indptr = np.hstack(
+            (self.ratings.indptr, self.ratings.indptr[-1])
+        )
+        if user_id >= self.user_feats.shape[1]:
+            new_col = np.zeros(self.rank).reshape(-1, 1)
+            self.user_feats = np.hstack((self.user_feats, new_col))
