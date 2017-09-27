@@ -63,23 +63,50 @@ class ALS(object):
         self.item_feats = None
         self.user_feats = None
 
-    def fit(self, ratings):
+    def fit(self, X):
         """Fit the model to the given ratings.
 
         Args:
-            ratings (numpy.ndarray or scipy.sparse): Ratings matrix of users x
+            X (numpy.ndarray or scipy.sparse): Ratings matrix of users x
                 items.
         Returns:
             self
 
         """
-        ratings = check_array(ratings, accept_sparse='csr')
+        _, _ = self.fit_transform(X)
+        return self
+
+    def fit_transform(self, X):
+        """Fit the model to the given ratings.
+
+        Args:
+            X : {array-like, sparse matrix}, shape (n_samples, m_samples)
+                Data matrix to be decomposed.
+
+        Returns
+        -------
+            user_feats : array, shape (k_components, n_samples)
+                The array of latent user features.
+
+            item_feats : array, shape (k_components, m_samples)
+                The array of latent item features.
+
+        """
+        ratings = check_array(X, accept_sparse='csr')
         random_state = check_random_state(self.random_state)
         with open('random.pkl', 'wb') as state:
             pickle.dump(random_state.get_state(), state)
         sps.save_npz('ratings', ratings)
-        subprocess.run(['python', 'fit_als.py', str(self.rank),
-                        str(self.tol), str(self.alpha)])
+        try:
+            subprocess.run(
+                ['python', 'fit_als.py', str(self.rank), str(self.tol),
+                 str(self.alpha), '-rs', 'random.pkl', '-j',
+                 str(self.n_jobs), '-v', str(self.verbose)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        except subprocess.CalledProcessError as err:
+            err_msg = '\n\t'.join(err.stderr.decode().split('\n'))
+            raise ValueError('Fitting ALS failed with error:\n\t{}'
+                             .format(err_msg))
         with np.load('features.npz') as loader:
             self.user_feats = loader['user']
             self.item_feats = loader['item']
@@ -87,10 +114,10 @@ class ALS(object):
             os.remove(_file)
         self.ratings = ratings
         users, items = self.ratings.nonzero()
-        X = np.hstack((users, items))
+        X = np.hstack((users.reshape(-1, 1), items.reshape(-1, 1)))
         y = self.ratings[users, items].A1
         self.reconstruction_err_ = self.score(X, y)
-        return self
+        return self.user_feats, self.item_feats
 
     def predict_one(self, user, item):
         """Given a user and item provide the predicted rating.
