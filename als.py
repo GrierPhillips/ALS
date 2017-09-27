@@ -142,11 +142,8 @@ class ALS(object):
 
         """
         check_is_fitted(self, ['item_feats', 'user_feats'])
-        non_zeros = ratings.nonzero()
-        pred = np.array([
-            self.predict_one(user, item)
-            for user, item in zip(non_zeros[0], non_zeros[1])])
-        rmse = self.root_mean_squared_error(ratings.data, pred)
+        pred = np.array([X[i][0].dot(X[i][1]) for i in range(X.shape[0])])
+        rmse = -self.root_mean_squared_error(y, pred)
         return rmse
 
     def update_user(self, user, item, rating):
