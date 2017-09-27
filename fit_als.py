@@ -27,22 +27,24 @@ PARSER.add_argument(
 PARSER.add_argument(
     '-j', '--jobs', metavar='N_jobs', type=int,
     help='Set the number of jobs to run in parallel.',
-    choices=[-1] + list(range(1, os.cpu_count())))
+    choices=[-1] + list(range(1, os.cpu_count())), default=1)
 PARSER.add_argument(
     '-rs', '--random_state', metavar='Random_State',
     help='The random state to use. Must be either a filename of a pickled ' +
     'state of a RandomState or and integer.')
 PARSER.add_argument(
-    '-v', '--verbose', action='store_true',
-    help='Enable verbose output.')
+    '-v', '--verbose', metavar='Verbosity', choices=[0, 1], type=int,
+    help='Disable/Enable verbose output.', default=0)
 ARGS = PARSER.parse_args()
 np.seterr(divide='ignore', invalid='ignore')
 if ARGS.jobs == -1:
     ARGS.jobs = os.cpu_count()
-RATINGS = sps.load_npz('rat_mat.npz')
+RATINGS = sps.load_npz('ratings.npz')
 if isinstance(ARGS.random_state, str) and ARGS.random_state.endswith('.pkl'):
-    with open(ARGS.random_state, 'rb') as state:
-        RANDOM_STATE = pickle.load(state)
+    with open(ARGS.random_state, 'rb') as state_file:
+        state = pickle.load(state_file)
+    RANDOM_STATE = np.random.RandomState()
+    RANDOM_STATE.set_state(state)
 else:
     RANDOM_STATE = np.random.RandomState(ARGS.random_state)
 USER_FEATS = np.zeros((ARGS.rank, RATINGS.shape[0]))
