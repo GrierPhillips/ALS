@@ -14,6 +14,8 @@ import subprocess
 
 import numpy as np
 import scipy.sparse as sps
+from sklearn.base import BaseEstimator
+from sklearn.metrics import mean_squared_error
 from sklearn.utils.validation import (check_array, check_is_fitted,
                                       check_random_state)
 
@@ -21,7 +23,22 @@ from sklearn.utils.validation import (check_array, check_is_fitted,
 # pylint: disable=E1101
 
 
-class ALS(object):
+def root_mean_squared_error(true, pred):
+    """Calculate the root mean sqaured error.
+
+    Args:
+        true (np.ndarray): Array like of true values.
+        pred (np.ndarray): Array like of predicted values.
+    Returns:
+        rmse (float): Root mean squared error for the given values.
+
+    """
+    mse = mean_squared_error(true, pred)
+    rmse = np.sqrt(mse)
+    return rmse
+
+
+class ALS(BaseEstimator):
     """Implementation of Alternative Least Squares for Matrix Factorization.
 
     Attributes:
@@ -169,8 +186,9 @@ class ALS(object):
 
         """
         check_is_fitted(self, ['item_feats', 'user_feats'])
-        pred = np.array([X[i][0].dot(X[i][1]) for i in range(X.shape[0])])
-        rmse = -self.root_mean_squared_error(y, pred)
+        pred = np.array([self.user_feats[:, X[i][0]].T.dot(self.item_feats[:, X[i][1]].T)
+                         for i in range(X.shape[0])])
+        rmse = -root_mean_squared_error(y, pred)
         return rmse
 
     def update_user(self, user, item, rating):
