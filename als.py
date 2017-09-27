@@ -38,6 +38,48 @@ def root_mean_squared_error(true, pred):
     return rmse
 
 
+def _check_x(X):
+    if isinstance(X, tuple):
+        if len(X) != 2:
+            raise ValueError('Argument X should be a tuple of length 2 '
+                             'containing an array for user attributes and an '
+                             'array for item attributes.')
+        Y = np.array(X[1])
+        X = np.array(X[0])
+    elif isinstance(X, DataHolder):
+        Y = X.Y
+        X = X.X
+    else:
+        raise TypeError('Type of argument X should be tuple or DataHolder, was'
+                        ' {}.'.format(str(type(X)).split("'")[1]))
+    if Y.ndim != 2 or X.ndim != 2:
+        Y = Y.reshape(1, -1)
+        X = X.reshape(1, -1)
+    return X, Y
+
+
+class DataHolder(object):
+    """Class for packing user and item attributes into sigle data structure.
+
+    Parameters
+    ----------
+    X : array-like, shape (n_samples, p_attributes)
+        Array of user attributes. Each row represents a user.
+
+    Y : array-like, shape (m_samples, q_attributes)
+        Array of item attributes. Each row represents an item.
+
+    """
+
+    def __init__(self, X, Y):
+        self.X = X
+        self.Y = Y
+        self.shape = self.X.shape
+
+    def __getitem__(self, x):
+        return self.X[x], self.Y[x]
+
+
 class ALS(BaseEstimator):
     """Implementation of Alternative Least Squares for Matrix Factorization.
 
@@ -136,6 +178,28 @@ class ALS(BaseEstimator):
         self.reconstruction_err_ = self.score(X, y)
         return self.user_feats, self.item_feats
 
+    def _predict(self, X):
+        """Make predictions for the given arrays.
+
+        Parameters
+        ----------
+        X : tuple, len = 2
+            Tuple containing arrays of user indices and item indices.
+
+        Returns
+        -------
+        predictions : array, shape (n_samples, m_samples)
+            Array of all predicted values for the given user/item pairs.
+
+        """
+        X, Y = _check_x(X)
+        X = check_array(X)
+        Y = check_array(Y)
+        predictions = np.array([
+            self.user_feats[:, X[i]].T.dot(self.item_feats[:, Y[i]])
+            for i in range(X.shape[0])])
+        return predictions
+
     def predict_one(self, user, item):
         """Given a user and item provide the predicted rating.
 
@@ -186,8 +250,9 @@ class ALS(BaseEstimator):
 
         """
         check_is_fitted(self, ['item_feats', 'user_feats'])
-        pred = np.array([self.user_feats[:, X[i][0]].T.dot(self.item_feats[:, X[i][1]].T)
-                         for i in range(X.shape[0])])
+        pred = np.array([
+            self.user_feats[:, X[i][0]].T.dot(self.item_feats[:, X[i][1]])
+            for i in range(X.shape[0])])
         rmse = -root_mean_squared_error(y, pred)
         return rmse
 
