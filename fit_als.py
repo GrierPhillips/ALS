@@ -1,8 +1,11 @@
 """Functions for multiprocessing of ALS-wr algorithm."""
 
+import argparse
 from concurrent.futures import (ProcessPoolExecutor, ThreadPoolExecutor,
                                 as_completed)
 from itertools import repeat
+import os
+import pickle
 import sys
 
 import numpy as np
@@ -12,29 +15,23 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.sputils import get_index_dtype, upcast
 from sklearn.metrics import mean_squared_error
 
-POOL_SIZE = 8
 
-
-def load_sparse_csr(filename):
-    """Load arrays that define a CSR matrix.
-
-    Args:
-        filename (string): String of the saved .npz file containing the data,
-            indices, and indptr arrays.
-
-    """
-    loader = np.load(filename)
-    return csr_matrix(
-        (loader['data'], loader['indices'], loader['indptr']),
-        shape=loader['shape'])
-
-
-RATINGS = load_sparse_csr('ratings_matrix.npz')
-RANK = int(sys.argv[1])
-TOLERANCE = float(sys.argv[2])
-ALPHA = float(sys.argv[3])
 USER_FEATS = np.zeros((RANK, RATINGS.shape[0]))
 ITEM_FEATS = np.random.rand(RANK, RATINGS.shape[1])
+PARSER = argparse.ArgumentParser(
+    description='Run the Alternating Least Squares algorithm in parallel.')
+PARSER.add_argument(
+    'rank', metavar='Rank', type=int,
+    help='The number of latent features (rank) in the matrix decomposition.')
+PARSER.add_argument(
+    'tol', metavar='Tolerance', type=float,
+    help='The tolerance of the stopping condition.')
+PARSER.add_argument(
+    'alpha', metavar='Lambda', type=float,
+    help='The regularization penalty.')
+ARGS = PARSER.parse_args()
+np.seterr(divide='ignore', invalid='ignore')
+RATINGS = sps.load_npz('rat_mat.npz')
 
 
 def fit_als():
@@ -44,7 +41,7 @@ def fit_als():
     item_avg = RATINGS.sum(0) / (RATINGS != 0).sum(0)
     item_avg[np.isnan(item_avg)] = 0
     ITEM_FEATS[0] = item_avg
-    while diff > TOLERANCE:
+    while diff > ARGS.tol:
         update()
         true = RATINGS.data
         non_zeros = RATINGS.nonzero()

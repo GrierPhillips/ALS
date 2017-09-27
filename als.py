@@ -67,9 +67,7 @@ class ALS(object):
                 items.
 
         """
-        self.ratings = ratings
-        np.savez('ratings_matrix', data=ratings.data, indices=ratings.indices,
-                 indptr=ratings.indptr, shape=ratings.shape)
+        sps.save_npz('ratings_matrix', ratings)
         subprocess.run(['python', 'fit_als.py', str(self.rank),
                         str(self.tolerance), str(self.alpha)])
         loader = np.load('features.npz')
