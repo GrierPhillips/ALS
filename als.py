@@ -39,7 +39,8 @@ class ALS(object):
 
     """
 
-    def __init__(self, rank, alpha=0.1, tolerance=0.001, seed=None):
+    def __init__(self, rank, alpha=0.1, tolerance=0.001, random_state=None,
+                 n_jobs=1, verbose=0):
         """Create instance of ALS with given parameters.
 
         Args:
@@ -53,8 +54,10 @@ class ALS(object):
         """
         self.rank = rank
         self.alpha = alpha
-        self.tolerance = tolerance
-        self.rand = np.random.RandomState(seed)
+        self.tol = tolerance
+        self.random_state = random_state
+        self.n_jobs = n_jobs
+        self.verbose = verbose
         self.ratings = None
         self.item_feats = None
         self.user_feats = None
@@ -65,14 +68,28 @@ class ALS(object):
         Args:
             ratings (numpy.ndarray or scipy.sparse): Ratings matrix of users x
                 items.
+        Returns:
+            self
 
         """
-        sps.save_npz('ratings_matrix', ratings)
+        ratings = check_array(ratings, accept_sparse='csr')
+        random_state = check_random_state(self.random_state)
+        with open('random.pkl', 'wb') as state:
+            pickle.dump(random_state.get_state(), state)
+        sps.save_npz('ratings', ratings)
         subprocess.run(['python', 'fit_als.py', str(self.rank),
-                        str(self.tolerance), str(self.alpha)])
-        loader = np.load('features.npz')
-        self.user_feats = loader['user']
-        self.item_feats = loader['item']
+                        str(self.tol), str(self.alpha)])
+        with np.load('features.npz') as loader:
+            self.user_feats = loader['user']
+            self.item_feats = loader['item']
+        for _file in ['ratings.npz', 'features.npz', 'random.pkl']:
+            os.remove(_file)
+        self.ratings = ratings
+        users, items = self.ratings.nonzero()
+        X = np.hstack((users, items))
+        y = self.ratings[users, items].A1
+        self.reconstruction_err_ = self.score(X, y)
+        return self
 
     def predict_one(self, user, item):
         """Given a user and item provide the predicted rating.

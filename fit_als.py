@@ -16,8 +16,6 @@ from scipy.sparse.sputils import get_index_dtype, upcast
 from sklearn.metrics import mean_squared_error
 
 
-USER_FEATS = np.zeros((RANK, RATINGS.shape[0]))
-ITEM_FEATS = np.random.rand(RANK, RATINGS.shape[1])
 PARSER = argparse.ArgumentParser(
     description='Run the Alternating Least Squares algorithm in parallel.')
 PARSER.add_argument(
@@ -29,9 +27,29 @@ PARSER.add_argument(
 PARSER.add_argument(
     'alpha', metavar='Lambda', type=float,
     help='The regularization penalty.')
+PARSER.add_argument(
+    '-j', '--jobs', metavar='N_jobs', type=int,
+    help='Set the number of jobs to run in parallel.',
+    choices=[-1] + list(range(1, os.cpu_count())))
+PARSER.add_argument(
+    '-rs', '--random_state', metavar='Random_State',
+    help='The random state to use. Must be either a filename of a pickled ' +
+    'state of a RandomState or and integer.')
+PARSER.add_argument(
+    '-v', '--verbose', action='store_true',
+    help='Enable verbose output.')
 ARGS = PARSER.parse_args()
 np.seterr(divide='ignore', invalid='ignore')
+if ARGS.jobs == -1:
+    ARGS.jobs = os.cpu_count()
 RATINGS = sps.load_npz('rat_mat.npz')
+if isinstance(ARGS.random_state, str) and ARGS.random_state.endswith('.pkl'):
+    with open(ARGS.random_state, 'rb') as state:
+        RANDOM_STATE = pickle.load(state)
+else:
+    RANDOM_STATE = np.random.RandomState(ARGS.random_state)
+USER_FEATS = np.zeros((ARGS.rank, RATINGS.shape[0]))
+ITEM_FEATS = RANDOM_STATE.rand(ARGS.rank, RATINGS.shape[1])
 
 
 def fit_als():
@@ -98,9 +116,9 @@ def update():
         axis (int, default: 0): The axis upon which to compute the update.
 
     """
-    user_arrays = np.array_split(np.arange(RATINGS.shape[0]), POOL_SIZE)
+    user_arrays = np.array_split(np.arange(RATINGS.shape[0]), ARGS.jobs)
     _update_parallel(user_arrays)
-    item_arrays = np.array_split(np.arange(RATINGS.shape[1]), POOL_SIZE)
+    item_arrays = np.array_split(np.arange(RATINGS.shape[1]), ARGS.jobs)
     _update_parallel(item_arrays, user=False)
 
 
@@ -114,8 +132,8 @@ def _update_parallel(arrays, user=True):
             features are being updated.
 
     """
-    with ProcessPoolExecutor() as pool:
-        params = {'rank': RANK, 'alpha': ALPHA, 'user': user}
+    with ProcessPoolExecutor(max_workers=ARGS.jobs) as pool:
+        params = {'rank': ARGS.rank, 'alpha': ARGS.alpha, 'user': user}
         results = pool.map(
             _thread_update_features,
             zip(arrays, repeat(params)))
