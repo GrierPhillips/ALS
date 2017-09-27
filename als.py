@@ -8,16 +8,17 @@ parallelized the algorithm in Matlab. This module implements the algorithm in
 parallel in python with the built in concurrent.futures module.
 """
 
-from os import cpu_count
+import os
+import pickle
 import subprocess
 
-
 import numpy as np
-from scipy.sparse import csr_matrix
+import scipy.sparse as sps
+from sklearn.utils.validation import (check_array, check_is_fitted,
+                                      check_random_state)
+
 
 # pylint: disable=E1101
-np.seterr(divide='ignore')
-POOL_SIZE = cpu_count()
 
 
 class ALS(object):
@@ -126,41 +127,27 @@ class ALS(object):
         ratings = self.user_feats.T[user].dot(self.item_feats)
         return ratings
 
-    def score(self, true):
+    def score(self, X, y):
         """Return the root mean squared error for the predicted values.
 
         Args:
-            true (pd.DataFrame): A pandas DataFrame structured with the
-                columns, 'Rating', 'User', 'Item'.
+            X : array-like
+                Array containing row and column values for predictions.
+            y : array-like
+                The true values.
 
         Returns:
             rmse (float): The root mean squared error for the test set given
                 the values predicted by the model.
 
         """
-        if not isinstance(self.item_feats, np.ndarray):
-            raise Exception('The model must be fit before generating a score.')
-        ratings = csr_matrix((true.Rating, (true.User, true.Item)))
+        check_is_fitted(self, ['item_feats', 'user_feats'])
         non_zeros = ratings.nonzero()
         pred = np.array([
             self.predict_one(user, item)
             for user, item in zip(non_zeros[0], non_zeros[1])])
         rmse = self.root_mean_squared_error(ratings.data, pred)
         return rmse
-
-    def fit_transform(self, ratings):
-        """Fit model to ratings and return predicted ratings.
-
-        Args:
-            ratings (numpy.ndarray or scipy.sparse): Ratings matrix of users x
-                items.
-        Returns:
-            predictions (numpy.ndarray): Matrix of all predicted ratings.
-
-        """
-        self.fit(ratings)
-        predictions = self.user_feats.T.dot(self.item_feats)
-        return predictions
 
     def update_user(self, user, item, rating):
         """Update a single user's feature vector.
