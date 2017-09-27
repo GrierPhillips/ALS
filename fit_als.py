@@ -9,10 +9,7 @@ import pickle
 import sys
 
 import numpy as np
-from numpy.linalg import LinAlgError
-from scipy.sparse._sparsetools import csr_tocsc
-from scipy.sparse import csr_matrix
-from scipy.sparse.sputils import get_index_dtype, upcast
+import scipy.sparse as sps
 from sklearn.metrics import mean_squared_error
 
 
@@ -81,16 +78,15 @@ def make_user_submats(item):
             that exist for the given column in the ratings matrix.
 
     """
-    idx_dtype = get_index_dtype(
+    idx_dtype = sps.sputils.get_index_dtype(
         (RATINGS.indptr, RATINGS.indices),
         maxval=max(RATINGS.nnz, RATINGS.shape[0]))
     indptr = np.empty(RATINGS.shape[1] + 1, dtype=idx_dtype)
     indices = np.empty(RATINGS.nnz, dtype=idx_dtype)
-    data = np.empty(RATINGS.nnz, dtype=upcast(RATINGS.dtype))
-    csr_tocsc(RATINGS.shape[0], RATINGS.shape[1],
-              RATINGS.indptr.astype(idx_dtype),
-              RATINGS.indices.astype(idx_dtype),
-              RATINGS.data, indptr, indices, data)
+    data = np.empty(RATINGS.nnz, dtype=sps.sputils.upcast(RATINGS.dtype))
+    sps._sparsetools.csr_tocsc(
+        RATINGS.shape[0], RATINGS.shape[1], RATINGS.indptr.astype(idx_dtype),
+        RATINGS.indices.astype(idx_dtype), RATINGS.data, indptr, indices, data)
     submat = USER_FEATS[:, indices[indptr[item]:indptr[item + 1]]]
     return submat
 
@@ -194,7 +190,7 @@ def _update_one(index, **params):
     feature_sums = submat.dot(row[np.newaxis].T)
     try:
         col = np.linalg.inv(reg_sums).dot(feature_sums)
-    except LinAlgError:
+    except np.linalg.LinAlgError:
         col = np.zeros((1, rank))
     return col.ravel()
 
