@@ -8,316 +8,292 @@ parallelized the algorithm in Matlab. This module implements the algorithm in
 parallel in python with the built in concurrent.futures module.
 """
 
-from concurrent.futures import (ProcessPoolExecutor, ThreadPoolExecutor,
-                                as_completed)
-from itertools import repeat
-from os import cpu_count
+import os
+import pickle
+import subprocess
 
 
 import numpy as np
-from numpy.linalg import LinAlgError
-from scipy.sparse import csr_matrix
+import scipy.sparse as sps
+from sklearn.base import BaseEstimator
 from sklearn.metrics import mean_squared_error
-
-# pylint: disable=E1101
-np.seterr(divide='ignore')
-POOL_SIZE = cpu_count()
+from sklearn.utils.validation import (check_array, check_is_fitted,
+                                      check_random_state)
 
 
-class ALS(object):
-    """Implementation of Alternative Least Squares for Matrix Factorization.
+# pylint: disable=E1101,W0212
 
-    Attributes:
-        rank (int): Integer representing the rank of the matrix factorization.
-        lambda_ (float, default=0.1): Float representing the regularization
-            penalty.
-        tolerance (float, default=0.1): Float representing the step size at
-            which to stop factorization.
-        ratings (np.ndarray or scipy.sparse): Array like containing model data.
-        item_features (np.ndarray): Array of shape m x rank where m represents
-            the number of items contained in the data. Contains the latent
-            features about items extracted by the factorization process.
-        user_features (np.ndarray): Array of shape m x rank where m represents
-            the number of users contained in the data. Contains the latent
-            features about users extracted by the factorization process.
+
+def root_mean_squared_error(true, pred):
+    """Calculate the root mean sqaured error.
+
+    Parameters
+    ----------
+        true : array, shape (n_samples)
+            Array of true values.
+        pred : array, shape (n_samples)
+            Array of predicted values.
+    Returns
+    -------
+        rmse : float
+            Root mean squared error for the given values.
 
     """
+    mse = mean_squared_error(true, pred)
+    rmse = np.sqrt(mse)
+    return rmse
+
+
+def _check_x(X):
+    if isinstance(X, tuple):
+        if len(X) != 2:
+            raise ValueError('Argument X should be a tuple of length 2 '
+                             'containing an array for user attributes and an '
+                             'array for item attributes.')
+        Y = np.array(X[1])
+        X = np.array(X[0])
+    elif isinstance(X, DataHolder):
+        Y = X.Y
+        X = X.X
+    else:
+        raise TypeError('Type of argument X should be tuple or DataHolder, was'
+                        ' {}.'.format(str(type(X)).split("'")[1]))
+    if Y.ndim != 2 or X.ndim != 2:
+        Y = Y.reshape(1, -1)
+        X = X.reshape(1, -1)
+    return X, Y
+
+
+class DataHolder(object):
+    """Class for packing user and item attributes into sigle data structure.
+
+    Parameters
+    ----------
+    X : array-like, shape (n_samples, p_attributes)
+        Array of user attributes. Each row represents a user.
+
+    Y : array-like, shape (m_samples, q_attributes)
+        Array of item attributes. Each row represents an item.
 
     def __init__(self, rank, lambda_=0.1, tolerance=0.001, seed=None):
         """Create instance of ALS with given parameters.
 
-        Args:
-            rank (int): Integer representing the rank of the matrix
-                factorization.
-            lambda_ (float, default=0.1): Float representing the regularization
-                term.
-            tolerance (float, default=0.001): Float representing the threshold
-                that a step must be below before update iterations will stop.
+    def __init__(self, X, Y):
+        """Initialize instance of DataHolder."""
+        self.X = X
+        self.Y = Y
+        self.shape = self.X.shape
 
-        """
+    def __getitem__(self, x):
+        """Return a tuple of the requested index for both X and Y."""
+        return self.X[x], self.Y[x]
+
+
+class ALS(BaseEstimator):
+    """Implementation of Alternative Least Squares for Matrix Factorization.
+
+    Parameters
+    ----------
+    rank : integer
+        The number of latent features (rank) to include in the matrix
+        factorization.
+
+    alpha : float, optional (default=0.1)
+        Float representing the regularization penalty.
+
+    tolerance : float, optional (default=0.1)
+        Float representing the difference in RMSE between iterations at which
+        to stop factorization.
+
+    random_state : int, RandomState instance or None, optional (default=None)
+        If int, random_state is the seed used by the random number generator;
+        If RandomState instance, random_state is the random number generator;
+        If None, the random number generator is the RandomState instance used
+        by `np.random`.
+
+    n_jobs : integer, optional (default=1)
+        The number of jobs to run in parallel for both `fit` and `predict`.
+        If -1, then the number of jobs is set to the number of cores.
+
+    verbose : int, optional (default=0)
+        Controls the verbosity of the ALS fitting process.
+
+    Attributes
+    ----------
+    ratings : {array-like, sparse matrix} shape (n_samples, m_samples)
+        Constant matrix representing the data to be modeled.
+
+    item_features : array-like, shape (k_features, m_samples)
+        Array of shape (rank, m_samples) where m represents the number of items
+        contained in the data. Contains the latent features of items extracted
+        by the factorization process.
+
+    user_features : array-like, shape (k_features, n_samples)
+        Array of shape (rank, n_samples) where n represents the number of users
+        contained in the data. Contains the latent features of users extracted
+        by the factorization process.
+
+    """
+
+    def __init__(self, rank, alpha=0.1, tolerance=0.001, random_state=None,
+                 n_jobs=1, verbose=0):
+        """Initialize instance of ALS."""
         self.rank = rank
-        self.lambda_ = lambda_
-        self.tolerance = tolerance
-        self.rand = np.random.RandomState(seed)
-        self.ratings = None
+        self.alpha = alpha
+        self.tol = tolerance
+        self.random_state = random_state
+        self.n_jobs = n_jobs
+        self.verbose = verbose
+        self.data = None
         self.item_feats = None
         self.user_feats = None
 
-    @staticmethod
-    def root_mean_squared_error(true, pred):
-        """Calculate the root mean sqaured error.
+    def fit(self, X):
+        """Fit the model to the given data.
 
-        Args:
-            true (np.ndarray): Array like of true values.
-            pred (np.ndarray): Array like of predicted values.
-        Returns:
-            rmse (float): Root mean squared error for the given values.
+        Parameters
+        ----------
+        X : {array-like, sparse matrix} shape (n_samples, m_samlpes)
+            Constant matrix representing the data to be modeled.
 
-        """
-        mse = mean_squared_error(true, pred)
-        rmse = np.sqrt(mse)
-        return rmse
-
-    def make_item_submats(self):
-        """Construct array of all the item submatrices from a ratings matrix.
-
-        Returns:
-            submats (np.ndarray): Array containing the submatrix constructed by
-                selecting the columns from the item features for the ratings
-                that exist for each row in the ratings matrix.
+        Returns
+        -------
+        self
 
         """
-        idx = self.ratings.indptr
-        col_arr = self.item_feats[:, self.ratings.indices]
-        submat_list = [
-            col_arr[:, row:col] for row, col in zip(idx[:-1], idx[1:])]
-        submats = np.empty(len(submat_list), dtype=object)
-        for row, submat in enumerate(submat_list):
-            submats[row] = submat
-        return submats
+        _, _ = self.fit_transform(X)
+        return self
 
-    def make_user_submats(self):
-        """Construct array of all the user submatrices from a ratings matrix.
+    def fit_transform(self, X):
+        """Fit the model to the given data.
 
-        Returns:
-            submats (np.ndarray): Array containing the submatrix constructed by
-                selecting the columns from the user features for the ratings
-                that exist for each column in the ratings matrix.
+        Parameters
+        ----------
+        X : {array-like, sparse matrix}, shape (n_samples, m_samples)
+            Constant matrix representing the data to be modeled.
 
-        """
-        ratings = self.ratings.tocsc()
-        idx = ratings.indptr
-        col_arr = self.user_feats[:, ratings.indices]
-        submat_list = [
-            col_arr[:, row:col] for row, col in zip(idx[:-1], idx[1:])]
-        submats = np.empty(len(submat_list), dtype=object)
-        for row, submat in enumerate(submat_list):
-            submats[row] = submat
-        return submats
+        Returns
+        -------
+        user_feats : array, shape (k_components, n_samples)
+            The array of latent user features.
 
-    def fit(self, ratings):
-        """Fit the model to the given ratings.
-
-        Args:
-            ratings (numpy.ndarray or scipy.sparse): Ratings matrix of users x
-                items.
+        item_feats : array, shape (k_components, m_samples)
+            The array of latent item features.
 
         """
-        self.ratings = ratings
-        rmse = float('inf')
-        diff = rmse
-        self.item_feats = self.rand.rand((self.rank, self.ratings.shape[1]))
-        course_avg = self.ratings.sum(0) / (self.ratings != 0).sum(0)
-        course_avg[np.isnan(course_avg)] = 0
-        self.item_feats[0] = course_avg
-        self.user_feats = np.zeros((self.rank, self.ratings.shape[0]))
-        while diff > self.tolerance:
-            self.user_feats = np.load(f)
-            self.update_users()
-            self.update_items()
-            true = self.ratings.data
-            non_zeros = self.ratings.nonzero()
-            pred = np.array([
-                self.predict_one(user, item)
-                for user, item in zip(non_zeros[0], non_zeros[1])])
-            new_rmse = self.root_mean_squared_error(true, pred)
-            diff = rmse - new_rmse
-            rmse = new_rmse
+        data = check_array(X, accept_sparse='csr')
+        random_state = check_random_state(self.random_state)
+        with open('random.pkl', 'wb') as state:
+            pickle.dump(random_state.get_state(), state)
+        sps.save_npz('data', data)
+        try:
+            subprocess.run(
+                ['python', 'fit_als.py', str(self.rank), str(self.tol),
+                 str(self.alpha), '-rs', 'random.pkl', '-j',
+                 str(self.n_jobs), '-v', str(self.verbose)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        except subprocess.CalledProcessError as err:
+            err_msg = '\n\t'.join(err.stderr.decode().split('\n'))
+            raise ValueError('Fitting ALS failed with error:\n\t{}'
+                             .format(err_msg))
+        with np.load('features.npz') as loader:
+            self.user_feats = loader['user']
+            self.item_feats = loader['item']
+        for _file in ['data.npz', 'features.npz', 'random.pkl']:
+            os.remove(_file)
+        self.data = data
+        users, items = self.data.nonzero()
+        X = np.hstack((users.reshape(-1, 1), items.reshape(-1, 1)))
+        y = self.data[users, items].A1
+        self.reconstruction_err_ = self.score(X, y)
+        return self.user_feats, self.item_feats
+
+    def _predict(self, X):
+        """Make predictions for the given arrays.
+
+        Parameters
+        ----------
+        X : tuple, len = 2
+            Tuple containing arrays of user indices and item indices.
+
+        Returns
+        -------
+        predictions : array, shape (n_samples, m_samples)
+            Array of all predicted values for the given user/item pairs.
+
+        """
+        X, Y = _check_x(X)
+        X = check_array(X)
+        Y = check_array(Y)
+        predictions = np.array([
+            self.user_feats[:, X[i]].T.dot(self.item_feats[:, Y[i]])
+            for i in range(X.shape[0])])
+        return predictions
 
     def predict_one(self, user, item):
         """Given a user and item provide the predicted rating.
 
-        Predicted ratings for a single user, item pair can be provided by the
-        fitted model by taking the dot product of the user row from the
+        Predicted values for a single user, item pair can be provided by the
+        fitted model by taking the dot product of the user column from the
         user_features and the item column from the item_features.
 
-        Formula:
-            rating = UiIj
-            Where Ui is the row of features for user i and Ij is the column of
-            features for item j.
+        Parameters
+        ----------
+        user : integer
+            Index for the user.
 
-        Args:
-            user (int): Integer representing the user id.
-            item (int): Integer representing the item id.
-        Returns:
-            rating (float): Float value of the predicted rating.
+        item : integer
+            Index for the item.
+
+        Returns
+        -------
+        prediction : float
+            Predicted value at index user, item in original data.
 
         """
-        rating = self.user_feats.T[user].dot(self.item_feats[:, item])
-        return rating
+        prediction = self.user_feats.T[user].dot(self.item_feats[:, item])
+        return prediction
 
     def predict_all(self, user):
-        """Given a user provide all of the predicted ratings.
+        """Given a user provide all of the predicted values.
 
-        Args:
-            user (int): Integer representing the user id.
-        Returns:
-            ratings (np.ndarray): Array containing predicted values for all
-                items.
+        Parameters
+        ----------
+        user : integer
+            Index for the user.
 
-        """
-        ratings = self.user_feats.T[user].dot(self.item_feats)
-        return ratings
-
-    def score(self, true):
-        """Return the root mean squared error for the predicted values.
-
-        Args:
-            true (pd.DataFrame): A pandas DataFrame structured with the
-                columns, 'Rating', 'User', 'Item'.
-
-        Returns:
-            rmse (float): The root mean squared error for the test set given
-                the values predicted by the model.
+        Returns
+        -------
+        predictions : array-like, shape (1, m_samples)
+            Array containing predicted values of all items for the given user.
 
         """
-        if not isinstance(self.item_feats, np.ndarray):
-            raise Exception('The model must be fit before generating a score.')
-        ratings = csr_matrix((true.Rating, (true.User, true.Item)))
-        non_zeros = ratings.nonzero()
-        pred = np.array([
-            self.predict_one(user, item)
-            for user, item in zip(non_zeros[0], non_zeros[1])])
-        rmse = self.root_mean_squared_error(ratings.data, pred)
-        return rmse
-
-    def fit_transform(self, ratings):
-        """Fit model to ratings and return predicted ratings.
-
-        Args:
-            ratings (numpy.ndarray or scipy.sparse): Ratings matrix of users x
-                items.
-        Returns:
-            predictions (numpy.ndarray): Matrix of all predicted ratings.
-
-        """
-        self.fit(ratings)
-        predictions = self.user_feats.T.dot(self.item_feats)
+        predictions = self.user_feats.T[user].dot(self.item_feats)
         return predictions
 
-    def update_users(self):
-        """Update the user features."""
-        user_arrays = np.array_split(
-            np.arange(self.ratings.shape[0]), POOL_SIZE)
-        item_submats = self.make_item_submats()
-        item_submat_arrays = np.array_split(item_submats, POOL_SIZE)
-        rows = np.array_split(
-            np.array(np.hsplit(self.ratings.data, self.ratings.indptr[1:-1])),
-            POOL_SIZE)
-        self._update_parallel(user_arrays, item_submat_arrays, rows, 'user')
+    def score(self, X, y):
+        """Return the root mean squared error for the predicted values.
 
-    def update_items(self):
-        """Update the item features."""
-        item_arrays = np.array_split(
-            np.arange(self.ratings.shape[1]), POOL_SIZE)
-        user_submats = self.make_user_submats()
-        user_submat_arrays = np.array_split(user_submats, POOL_SIZE)
-        rows = np.array_split(
-            np.array(np.hsplit(
-                self.ratings.tocsc().data,
-                self.ratings.tocsc().indptr[1:-1])),
-            POOL_SIZE)
-        self._update_parallel(item_arrays, user_submat_arrays, rows, 'item')
+        Parameters
+        ----------
+        X : array-like
+            Array containing row and column values for predictions.
+        y : array-like
+            The true values.
 
-    def _update_parallel(self, arrays, submat_arrays, rows, features):
-        """Update the given features in parallel.
-
-        Args:
-            arrays (np.ndarray): Array of indices that represent which column
-                of the features is being updated.
-            submat_arrays (np.ndarray): Array of submatrices that will be used
-                to calculate the update.
-            rows (np.ndarray): Array of arrays that contain the ratings for the
-                given feature column.
-            features (string): The features that will be updated either 'user'
-                or 'item'
+        Returns
+        -------
+        rmse : float
+            The root mean squared error for the test set given the values
+            predicted by the model.
 
         """
-        with ProcessPoolExecutor() as pool:
-            params = {'rank': self.rank, 'lambda_': self.lambda_}
-            results = pool.map(
-                self._thread_update_features,
-                zip(arrays, submat_arrays, rows, repeat(params)))
-            for result in results:
-                for index, value in result.items():
-                    if features == 'item':
-                        self.item_feats[:, index] = value
-                    else:
-                        self.user_feats[:, index] = value
-
-    def _thread_update_features(self, args):
-        """Split updates of feature matrices to multiple threads.
-
-        Args:
-            indices (np.ndarray): Array of integers representing the index of
-                the user or item that is to be updated.
-            submats (np.ndarray): Array of submatrices that will be used for
-                updating the features.
-            rows (np.ndarray): Array of rows that contain the ratings for the
-                given user or item.
-            params (dict): Parameters for the ALS algorithm
-        Returns:
-            data (dict): Dictionary of data with the user or item to be updated
-                as key and the array of features as the values.
-
-        """
-        indices, submats, rows, params = args
-        rank = params['rank']
-        lambda_ = params['lambda_']
-        data = {}
-        with ThreadPoolExecutor() as pool:
-            threads = {
-                pool.submit(self._update_one, item_submat, row, rank, lambda_):
-                ind for ind, item_submat, row in zip(indices, submats, rows)}
-        for thread in as_completed(threads):
-            ind = threads[thread]
-            result = thread.result()
-            data[ind] = result
-        return data
-
-    @staticmethod
-    def _update_one(submat, row, rank, lam):
-        """Update a single column for one of the feature matrices.
-
-        Args:
-            submat (np.ndarray): Submatrix of columns or rows from ratings
-                corresponding to the reviews by a user or on an item.
-            row (np.ndarray): Array of the ratings for the given item or user.
-            rank (int): The rank of the feature arrays.
-            lambda_ (float): The regularization parameter.
-        Returns:
-            col (np.ndarray): An array that represents a column from the
-                feature matrix that is to be updated.
-
-        """
-        num_ratings = row.size
-        reg_sums = submat.dot(submat.T) + lam * num_ratings * np.eye(rank)
-        feature_sums = submat.dot(row[np.newaxis].T)
-        try:
-            col = np.linalg.inv(reg_sums).dot(feature_sums)
-        except LinAlgError:
-            col = np.zeros((1, rank))
-        return col.flatten()
+        check_is_fitted(self, ['item_feats', 'user_feats'])
+        pred = np.array([
+            self.user_feats[:, X[i][0]].T.dot(self.item_feats[:, X[i][1]])
+            for i in range(X.shape[0])])
+        rmse = -root_mean_squared_error(y, pred)
+        return rmse
 
     def update_user(self, user, item, rating):
         """Update a single user's feature vector.
@@ -327,35 +303,44 @@ class ALS(object):
         the entire model should be rebuilt, but this is as close to a real-time
         update as is possible.
 
-        Args:
-            user (int): Integer representing the user id.
-            item (int): Integer representing the item id.
-            rating (int): Integer value of the rating assigned to item by user.
+        Parameters
+        ----------
+        user : integer
+            Index for the user.
+
+        item : integer
+            Index for the item
+
+        rating : integer
+            The value assigned to item by user.
+
         """
-        self.ratings[user, item] = rating
-        submat = self.item_feats[:, self.ratings[user].indices]
-        row = self.ratings[user].data
+        self.data[user, item] = rating
+        submat = self.item_feats[:, self.data[user].indices]
+        row = self.data[user].data
         col = self._update_one(submat, row, self.rank, self.lambda_)
         self.user_feats[:, user] = col
 
     def add_user(self, user_id):
         """Add a user to the model.
 
-        When a new user is added append a new row to the ratings matrix and
+        When a new user is added append a new row to the data matrix and
         create a new column in user_feats. When the new user rates an item,
         the model will be ready insert the rating and use the update_user
         method to calculate the least squares approximation of the user
         features.
 
-        Args:
-            user_id (int): The index of the user in the ratings matrix.
+        Parameters
+        ----------
+        user_id : integer
+            The index for the user.
 
         """
-        shape = self.ratings._shape  # pylint: disable=W0212
+        shape = self.data._shape
         if user_id >= shape[0]:
             shape = (shape[0] + 1, shape[1])
-        self.ratings.indptr = np.hstack(
-            (self.ratings.indptr, self.ratings.indptr[-1]))
+        self.data.indptr = np.hstack(
+            (self.data.indptr, self.data.indptr[-1]))
         if user_id >= self.user_feats.shape[1]:
             new_col = np.zeros((self.rank, 1))
             self.user_feats = np.hstack((self.user_feats, new_col))
