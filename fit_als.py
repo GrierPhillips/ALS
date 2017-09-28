@@ -39,7 +39,7 @@ ARGS = PARSER.parse_args()
 np.seterr(divide='ignore', invalid='ignore')
 if ARGS.jobs == -1:
     ARGS.jobs = os.cpu_count()
-RATINGS = sps.load_npz('ratings.npz')
+RATINGS = sps.load_npz('data.npz')
 if isinstance(ARGS.random_state, str) and ARGS.random_state.endswith('.pkl'):
     with open(ARGS.random_state, 'rb') as state_file:
         state = pickle.load(state_file)
@@ -102,8 +102,7 @@ def make_item_submats(user):
             that exist for the given row in the ratings matrix.
 
     """
-    idx = RATINGS.indptr
-    submat = ITEM_FEATS[:, RATINGS.indices[idx[user]:idx[user + 1]]]
+    submat = ITEM_FEATS[:, RATINGS[user].indices]
     return submat
 
 
