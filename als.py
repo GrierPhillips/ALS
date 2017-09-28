@@ -77,11 +77,13 @@ class DataHolder(object):
     """
 
     def __init__(self, X, Y):
+        """Initialize instance of DataHolder."""
         self.X = X
         self.Y = Y
         self.shape = self.X.shape
 
     def __getitem__(self, x):
+        """Return a tuple of the requested index for both X and Y."""
         return self.X[x], self.Y[x]
 
 
@@ -133,6 +135,7 @@ class ALS(BaseEstimator):
 
     def __init__(self, rank, alpha=0.1, tolerance=0.001, random_state=None,
                  n_jobs=1, verbose=0):
+        """Initialize instance of ALS."""
         self.rank = rank
         self.alpha = alpha
         self.tol = tolerance
