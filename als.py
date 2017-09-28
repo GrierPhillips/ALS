@@ -20,17 +20,22 @@ from sklearn.utils.validation import (check_array, check_is_fitted,
                                       check_random_state)
 
 
-# pylint: disable=E1101
+# pylint: disable=E1101,W0212
 
 
 def root_mean_squared_error(true, pred):
     """Calculate the root mean sqaured error.
 
-    Args:
-        true (np.ndarray): Array like of true values.
-        pred (np.ndarray): Array like of predicted values.
-    Returns:
-        rmse (float): Root mean squared error for the given values.
+    Parameters
+    ----------
+        true : array, shape (n_samples)
+            Array of true values.
+        pred : array, shape (n_samples)
+            Array of predicted values.
+    Returns
+    -------
+        rmse : float
+            Root mean squared error for the given values.
 
     """
     mse = mean_squared_error(true, pred)
@@ -83,79 +88,99 @@ class DataHolder(object):
 class ALS(BaseEstimator):
     """Implementation of Alternative Least Squares for Matrix Factorization.
 
-    Attributes:
-        rank (int): Integer representing the rank of the matrix factorization.
-        lambda_ (float, default=0.1): Float representing the regularization
-            penalty.
-        tolerance (float, default=0.1): Float representing the step size at
-            which to stop factorization.
-        ratings (np.ndarray or scipy.sparse): Array like containing model data.
-        item_features (np.ndarray): Array of shape m x rank where m represents
-            the number of items contained in the data. Contains the latent
-            features about items extracted by the factorization process.
-        user_features (np.ndarray): Array of shape m x rank where m represents
-            the number of users contained in the data. Contains the latent
-            features about users extracted by the factorization process.
+    Parameters
+    ----------
+    rank : integer
+        The number of latent features (rank) to include in the matrix
+        factorization.
+
+    alpha : float, optional (default=0.1)
+        Float representing the regularization penalty.
+
+    tolerance : float, optional (default=0.1)
+        Float representing the difference in RMSE between iterations at which
+        to stop factorization.
+
+    random_state : int, RandomState instance or None, optional (default=None)
+        If int, random_state is the seed used by the random number generator;
+        If RandomState instance, random_state is the random number generator;
+        If None, the random number generator is the RandomState instance used
+        by `np.random`.
+
+    n_jobs : integer, optional (default=1)
+        The number of jobs to run in parallel for both `fit` and `predict`.
+        If -1, then the number of jobs is set to the number of cores.
+
+    verbose : int, optional (default=0)
+        Controls the verbosity of the ALS fitting process.
+
+    Attributes
+    ----------
+    ratings : {array-like, sparse matrix} shape (n_samples, m_samples)
+        Constant matrix representing the data to be modeled.
+
+    item_features : array-like, shape (k_features, m_samples)
+        Array of shape (rank, m_samples) where m represents the number of items
+        contained in the data. Contains the latent features of items extracted
+        by the factorization process.
+
+    user_features : array-like, shape (k_features, n_samples)
+        Array of shape (rank, n_samples) where n represents the number of users
+        contained in the data. Contains the latent features of users extracted
+        by the factorization process.
 
     """
 
     def __init__(self, rank, alpha=0.1, tolerance=0.001, random_state=None,
                  n_jobs=1, verbose=0):
-        """Create instance of ALS with given parameters.
-
-        Args:
-            rank (int): Integer representing the rank of the matrix
-                factorization.
-            alpha (float, default=0.1): Float representing the regularization
-                term.
-            tolerance (float, default=0.001): Float representing the threshold
-                that a step must be below before update iterations will stop.
-
-        """
         self.rank = rank
         self.alpha = alpha
         self.tol = tolerance
         self.random_state = random_state
         self.n_jobs = n_jobs
         self.verbose = verbose
-        self.ratings = None
+        self.data = None
         self.item_feats = None
         self.user_feats = None
 
     def fit(self, X):
-        """Fit the model to the given ratings.
+        """Fit the model to the given data.
 
-        Args:
-            X (numpy.ndarray or scipy.sparse): Ratings matrix of users x
-                items.
-        Returns:
-            self
+        Parameters
+        ----------
+        X : {array-like, sparse matrix} shape (n_samples, m_samlpes)
+            Constant matrix representing the data to be modeled.
+
+        Returns
+        -------
+        self
 
         """
         _, _ = self.fit_transform(X)
         return self
 
     def fit_transform(self, X):
-        """Fit the model to the given ratings.
+        """Fit the model to the given data.
 
-        Args:
-            X : {array-like, sparse matrix}, shape (n_samples, m_samples)
-                Data matrix to be decomposed.
+        Parameters
+        ----------
+        X : {array-like, sparse matrix}, shape (n_samples, m_samples)
+            Constant matrix representing the data to be modeled.
 
         Returns
         -------
-            user_feats : array, shape (k_components, n_samples)
-                The array of latent user features.
+        user_feats : array, shape (k_components, n_samples)
+            The array of latent user features.
 
-            item_feats : array, shape (k_components, m_samples)
-                The array of latent item features.
+        item_feats : array, shape (k_components, m_samples)
+            The array of latent item features.
 
         """
-        ratings = check_array(X, accept_sparse='csr')
+        data = check_array(X, accept_sparse='csr')
         random_state = check_random_state(self.random_state)
         with open('random.pkl', 'wb') as state:
             pickle.dump(random_state.get_state(), state)
-        sps.save_npz('ratings', ratings)
+        sps.save_npz('data', data)
         try:
             subprocess.run(
                 ['python', 'fit_als.py', str(self.rank), str(self.tol),
@@ -169,12 +194,12 @@ class ALS(BaseEstimator):
         with np.load('features.npz') as loader:
             self.user_feats = loader['user']
             self.item_feats = loader['item']
-        for _file in ['ratings.npz', 'features.npz', 'random.pkl']:
+        for _file in ['data.npz', 'features.npz', 'random.pkl']:
             os.remove(_file)
-        self.ratings = ratings
-        users, items = self.ratings.nonzero()
+        self.data = data
+        users, items = self.data.nonzero()
         X = np.hstack((users.reshape(-1, 1), items.reshape(-1, 1)))
-        y = self.ratings[users, items].A1
+        y = self.data[users, items].A1
         self.reconstruction_err_ = self.score(X, y)
         return self.user_feats, self.item_feats
 
@@ -203,50 +228,59 @@ class ALS(BaseEstimator):
     def predict_one(self, user, item):
         """Given a user and item provide the predicted rating.
 
-        Predicted ratings for a single user, item pair can be provided by the
-        fitted model by taking the dot product of the user row from the
+        Predicted values for a single user, item pair can be provided by the
+        fitted model by taking the dot product of the user column from the
         user_features and the item column from the item_features.
 
-        Formula:
-            rating = UiIj
-            Where Ui is the row of features for user i and Ij is the column of
-            features for item j.
+        Parameters
+        ----------
+        user : integer
+            Index for the user.
 
-        Args:
-            user (int): Integer representing the user id.
-            item (int): Integer representing the item id.
-        Returns:
-            rating (float): Float value of the predicted rating.
+        item : integer
+            Index for the item.
+
+        Returns
+        -------
+        prediction : float
+            Predicted value at index user, item in original data.
 
         """
-        rating = self.user_feats.T[user].dot(self.item_feats[:, item])
-        return rating
+        prediction = self.user_feats.T[user].dot(self.item_feats[:, item])
+        return prediction
 
     def predict_all(self, user):
-        """Given a user provide all of the predicted ratings.
+        """Given a user provide all of the predicted values.
 
-        Args:
-            user (int): Integer representing the user id.
-        Returns:
-            ratings (np.ndarray): Array containing predicted values for all
-                items.
+        Parameters
+        ----------
+        user : integer
+            Index for the user.
+
+        Returns
+        -------
+        predictions : array-like, shape (1, m_samples)
+            Array containing predicted values of all items for the given user.
 
         """
-        ratings = self.user_feats.T[user].dot(self.item_feats)
-        return ratings
+        predictions = self.user_feats.T[user].dot(self.item_feats)
+        return predictions
 
     def score(self, X, y):
         """Return the root mean squared error for the predicted values.
 
-        Args:
-            X : array-like
-                Array containing row and column values for predictions.
-            y : array-like
-                The true values.
+        Parameters
+        ----------
+        X : array-like
+            Array containing row and column values for predictions.
+        y : array-like
+            The true values.
 
-        Returns:
-            rmse (float): The root mean squared error for the test set given
-                the values predicted by the model.
+        Returns
+        -------
+        rmse : float
+            The root mean squared error for the test set given the values
+            predicted by the model.
 
         """
         check_is_fitted(self, ['item_feats', 'user_feats'])
@@ -264,35 +298,44 @@ class ALS(BaseEstimator):
         the entire model should be rebuilt, but this is as close to a real-time
         update as is possible.
 
-        Args:
-            user (int): Integer representing the user id.
-            item (int): Integer representing the item id.
-            rating (int): Integer value of the rating assigned to item by user.
+        Parameters
+        ----------
+        user : integer
+            Index for the user.
+
+        item : integer
+            Index for the item
+
+        rating : integer
+            The value assigned to item by user.
+
         """
-        self.ratings[user, item] = rating
-        submat = self.item_feats[:, self.ratings[user].indices]
-        row = self.ratings[user].data
+        self.data[user, item] = rating
+        submat = self.item_feats[:, self.data[user].indices]
+        row = self.data[user].data
         col = self._update_one(submat, row, self.rank, self.lambda_)
         self.user_feats[:, user] = col
 
     def add_user(self, user_id):
         """Add a user to the model.
 
-        When a new user is added append a new row to the ratings matrix and
+        When a new user is added append a new row to the data matrix and
         create a new column in user_feats. When the new user rates an item,
         the model will be ready insert the rating and use the update_user
         method to calculate the least squares approximation of the user
         features.
 
-        Args:
-            user_id (int): The index of the user in the ratings matrix.
+        Parameters
+        ----------
+        user_id : integer
+            The index for the user.
 
         """
-        shape = self.ratings._shape  # pylint: disable=W0212
+        shape = self.data._shape
         if user_id >= shape[0]:
             shape = (shape[0] + 1, shape[1])
-        self.ratings.indptr = np.hstack(
-            (self.ratings.indptr, self.ratings.indptr[-1]))
+        self.data.indptr = np.hstack(
+            (self.data.indptr, self.data.indptr[-1]))
         if user_id >= self.user_feats.shape[1]:
             new_col = np.zeros((self.rank, 1))
             self.user_feats = np.hstack((self.user_feats, new_col))
